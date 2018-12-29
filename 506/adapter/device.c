@@ -351,15 +351,15 @@ int IOTDev_GetAttribute(UINT32 attribute_id, OCTData *attr)
             attr->value.Integer.Integer = Wifi_Door_Lock_Get_Int_Attribute(attribute_id);//从串口得到门锁的属性并存储
             break;
 
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
         case GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD:
         case GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT:
+#ifndef Wifi_Door_Lock_Open_Ignore_Event
         case GARDGET_DEVICE_ATTRIBUTE_CLEAR_PASSWORD:
         case GARDGET_DEVICE_ATTRIBUTE_CLEAR_FINGERPRINT:
+#endif
             attr->type = OCTDATATYPE_STRING;
             iots_strcpy(attr->value.String.String,Wifi_Door_Lock_Get_String_Attribute(attribute_id));//从串口得到门锁的属性并存储
             break;
-#endif
 
         default:
             return E_FAILED;
