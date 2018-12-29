@@ -954,7 +954,6 @@ void Wifi_Consume_Queue_Data_Handle(void*arg1,void*arg2)
 **功能描述: 处理从MCU收到的事件
 **作	  者: wqw
 *****************************************************************************/
-//int IOTSysP_SntpAsync(void);
 static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info)
 {
     log_debug0("Recv MCU event, event type:%d\n", frame_info->frame_type);
