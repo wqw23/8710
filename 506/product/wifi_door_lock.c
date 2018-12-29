@@ -954,6 +954,7 @@ void Wifi_Consume_Queue_Data_Handle(void*arg1,void*arg2)
 **功能描述: 处理从MCU收到的事件
 **作	  者: wqw
 *****************************************************************************/
+//int IOTSysP_SntpAsync(void);
 static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info)
 {
     log_debug0("Recv MCU event, event type:%d\n", frame_info->frame_type);
@@ -973,10 +974,8 @@ static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info
             UINT16 year = 0;
             INT32 relative_year = 0;
             UINT8 temp[7] = {0};
-            UINT8 ret=5;
-            //ret=IOTSysP_SntpSync();
-            log_debug0("11111111111111111111111111111111111111111111ret=%d\n",ret);
-            if(ret<0){
+
+            if(IOTSysP_SntpAsync()){
                 temp[0] = 0x01;         //错误值， 0 表示本次授时有效， 1 表示本次授时无效
             }else{
                 utc_time = (struct tm *)IOTSys_localtime(NULL);
@@ -984,14 +983,8 @@ static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info
                 year = utc_time->tm_year;
                 log_debug0("TYPE_EVENT_REQ_TIME--year=%d\n",year);
                 relative_year=year-2000;
-                if(relative_year>=18){
-                    temp[0] = 0x00;         //错误值， 0 表示本次授时有效， 1 表示本次授时无效
-                log_debug0("relative_year=%d\n",relative_year);
-                }else{
-                    temp[0] = 0x01;         //错误值， 0 表示本次授时有效， 1 表示本次授时无效
-                    log_debug0("relative_year=%d\n",relative_year);
-                }
 
+                temp[0] = 0x00;         //错误值， 0 表示本次授时有效， 1 表示本次授时无效
                 temp[1] = relative_year;
                 temp[2] = utc_time->tm_mon ;
                 temp[3] = utc_time->tm_mday;
