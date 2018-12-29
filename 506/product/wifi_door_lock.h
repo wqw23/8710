@@ -16,5 +16,6 @@ UINT32 Wifi_Door_Lock_Get_Int_Attribute(UINT32 attribute_id);
 UINT8* Wifi_Door_Lock_Get_String_Attribute(UINT32 attribute_id);
 UINT8 Wifi_Door_Lock_Init(void);
 UINT8 Wifi_Door_Lock_Enter_Softap(void);
+void Get_Gadgetid_Function(UINT8* arg);
 
 #endif
