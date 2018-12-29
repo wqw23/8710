@@ -1,1 +1,0 @@
-#define SDK_VERSION 0.4.00
