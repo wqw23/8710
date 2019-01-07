@@ -23,10 +23,6 @@
 #include "iotsdk.h"
 //Adapter head file
 #include "adapter.h"
-#include "udp_task.h"
-#include "wifi_utils.h"
-#include "factory_net_task.h"
-#include "factory_cycle_task.h"
 #include "product_config.h"
 
 #define FORCE_NETWORK_CONFIG   1
@@ -35,7 +31,6 @@ int IOTConf_QuickRestart(void);
 
 void main_task(void *arg)
 {
-#if 1
     int retval = E_SUCCESS;
 
     do {
@@ -62,77 +57,10 @@ void main_task(void *arg)
         vTaskDelay(1000/portTICK_RATE_MS);
     }while(1);
 
-#else
-
-    int retval = E_SUCCESS;
-
-    log_debug0("Enter main_task....\n");
-
-    do {
-        //判断是否配置过网络
-        if(IOTSDK_State() == STATE_SOFTAP) {
-            if(!IOTConf_QuickRestart() && Wifi_Door_Lock_Enter_Softap() &&retval == E_SUCCESS)
-            {
-                wifi_on(RTW_MODE_STA); //set station mode
-            }
-            log_debug0("Start softap!\n");
-            //进入网络配置
-            retval = IOTWifi_Start(FORCE_NETWORK_CONFIG);
-        }
-
-        if(retval == E_SUCCESS) {
-            // 进入LOOP
-            IOTDM_Loop();  // 解绑后Loop会退出，Loop内会清除station_config
-        } else {
-            log_debug0("wifi config failed, reboot...\n");
-        }
-        vTaskDelay(1000/portTICK_RATE_MS);
-    }while(1);
-
     IOTSys_Reboot();
     vTaskDelete(NULL);
-
-#endif
 }
 
-void _normal_mode(void) //未扫描到，进入正常模式
-{
-    log_debug0("init_task....normal_mode\n");
-    // create sdk task
-    if(xTaskCreate(main_task, ((const char*)"main_task"), 1024*1 + 512, NULL, tskIDLE_PRIORITY + 3 + PRIORITIE_OFFSET, NULL) != pdPASS)
-        printf("\n\r%s xTaskCreate(init_thread) failed", __FUNCTION__);
-    log_debug0("create main task  ....\n");
-}
-void _factory_mode(void)
-{
-    log_debug0("_factory_mode...........\n");
-    if(connect_wifi(FACTORY_WIFI_SSID,PASSWD)==true)
-    {
-        xTaskCreate(factory_connect_net_task,"factory_connect_net_task",512,NULL,4,NULL);
-    }else{
-        xTaskCreate(factory_cycle_auto_task,"factory_cycle_auto_task",512,NULL,4,NULL);
-    }
-}
-
-void init_task(void *arg)
-{
-    //wifi_on(RTW_MODE_STA); //set station mode
-    log_debug0("init_task....\n");
-    if(IOTSDK_SoftStart()) {
-        _normal_mode();
-    } else {
-#ifdef ENADLE_FACTORY_MODE
-        if (isFactoryMode_wifi()) { //扫描到SSID进入工厂模式
-            _factory_mode();
-        } else {
-            _normal_mode();
-        }
-#else
-        _normal_mode();
-#endif
-    }
-    vTaskDelete(NULL);
-}
 void user_task(void *arg)
 {
     IOTDM_LogLevel(2);
@@ -151,8 +79,9 @@ void user_task(void *arg)
     }
 
     IOTHAL_Init();
-    xTaskCreate(init_task,"init_task",512,NULL,4,NULL);
-
+    if(xTaskCreate(main_task, ((const char*)"main_task"), 1024*1 + 512, NULL, tskIDLE_PRIORITY + 3 + PRIORITIE_OFFSET, NULL) != pdPASS)
+        printf("\n\r%s xTaskCreate(init_thread) failed", __FUNCTION__);
+    log_debug0("create main task  ....\n");
 
     vTaskDelete(NULL);
 }

@@ -8,7 +8,6 @@
 #include "led.h"
 #include "product_config.h"
 #include "hal_dev.h"
-#include "hal_event.h"
 
 void HalDev_Init(void)
 {

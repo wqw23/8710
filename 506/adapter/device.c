@@ -17,17 +17,12 @@
 //Adapter head file
 #include "adapter.h"
 #include "version.h"
-#include "schema_task.h"
 #include "flash.h"
 #include "lamp_effect.h"
 #include "report_task.h"
-#include "keyboard.h"
-#include "hal_key.h"
 #include "hal_dev.h"
 #include "led.h"
-#include "relay.h"
 #include "product_config.h"
-#include "factory_event_task.h"
 
 #include "wifi_door_lock.h"
 
@@ -40,21 +35,6 @@ static DevAction g_actions[] = DEVICE_ACTIONS;
 #define ASYNC_REPORT_ATTR_COUNT 3
 #define STATIC_IP_FLAG          1//1使用静态IP,0是不使用静态IP
 
-static xTaskHandle key_task_Handle;
-
-static struct DeviceConfData *g_conf_data;
-static int m_dev_status = 0;
-static int m_dev_memory_mode = 0;
-
-#define MEMORY_MODE_INIT_VALUE      0x02
-#define GET_MEMORY_MODE_FROM_FLASH(x)              (x & 0x02 ? 1:0)
-#define UPDATE_MEMORY_MODE(x,y)                    (x ? (y|=0x02) : (y&=0xFD))
-#define GET_RELAY_STATUS_FROM_FLASH(x)             (x & 0x01)
-#define UPDATE_RELAY_STATUS(x,y)                   (x ? (y|=0x01) : (y&=0xFE))
-
-static xTaskHandle key_task_Handle;
-extern int factory_mode;
-
 static DeviceInformation g_dev_infor = {
     g_attributes,        //attributes;
     ATTRIBUTES_COUNT(),  //attributes_count;
@@ -62,9 +42,6 @@ static DeviceInformation g_dev_infor = {
     ACTIONS_COUNT(),     //actions_count;
 };
 
-void timer_actions(void *status){
-    async_report_attr(GARDGET_DEVICE_ATTRIBUTE_DELAY_TIME, ASYNC_UPDATE_FLASH);
-}
 void _DeviceReset(void)
 {
     log_debug0("%s entry\n", __FUNCTION__);
@@ -73,16 +50,10 @@ void _DeviceReset(void)
 
     memset(&data,0,sizeof(struct DeviceConfData));
 
-    //modify global variable.
-    m_dev_memory_mode = 1;
-
     //modify flash data.
-    UPDATE_MEMORY_MODE(m_dev_memory_mode,data.relaystatus);
-    UPDATE_RELAY_STATUS(m_dev_status,data.relaystatus);
     flash_reset(&data);
 
     //modify hardware status.
-
 }
 
 void _EntrySoftap(void)
@@ -108,8 +79,7 @@ int IOTHAL_LoadFlashData(void)
 
     //Load data from flash, E_FAILED is hardware fault.
     //set default config before load flash.
-    g_conf_data = flash_export_user_data();
-    g_conf_data->relaystatus = MEMORY_MODE_INIT_VALUE;
+    //g_conf_data = flash_export_user_data();
 
     ret = flash_load();
     if (E_PARAM_ERROR == ret) {
@@ -130,13 +100,6 @@ int IOTHAL_LoadFlashData(void)
         //set current version to the flash.
         flash_set_version(CURRENT_FLASH_VERSION);
     }
-
-    if(GET_MEMORY_MODE_FROM_FLASH(g_conf_data->relaystatus)){
-        m_dev_memory_mode = 1;
-    }else{
-        m_dev_memory_mode = 0;
-    }
-    m_dev_status = GET_RELAY_STATUS_FROM_FLASH(g_conf_data->relaystatus);
 
     flash_update();
 
@@ -204,7 +167,6 @@ void IOTHAL_Init()
         if (IOTSDK_State() == STATE_WORK){
             lamp_effect_set(LAMP_EFFECT_STATION_MODE, PERIOD);
         }
-        schema_task_init(flash_export_timers(), timer_actions);
         } else {
         log_debug2("Current in OTA mode\n");
     }
@@ -214,14 +176,11 @@ int IOTDev_Init(void)
 {
     log_debug0("%s IOTDev_Init \n", __FUNCTION__);
     report_init(ASYNC_REPORT_ATTR_COUNT);
-    schema_task_init(flash_export_timers(), timer_actions);
-    schema_task_resume();
     return E_SUCCESS;
 }
 
 void IOTDev_Exit(void)
 {
-    schema_task_suspend();
     report_deinit();
     log_debug0("%s entry\n", __FUNCTION__);
 }
@@ -273,7 +232,6 @@ void IOTDev_Event(DMEvent *event)
         break;
     case IOTDM_EVENT_CREATEGADGET:
         Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_CREATEGADGET,event->param.creategadget.created);
-        Get_Gadgetid_Function(event->param.creategadget.gadgetid);
         break;
     case IOTDM_EVENT_FORCEBIND: //仅清除设备信�?
         break;
@@ -353,10 +311,8 @@ int IOTDev_GetAttribute(UINT32 attribute_id, OCTData *attr)
 
         case GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD:
         case GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT:
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
         case GARDGET_DEVICE_ATTRIBUTE_CLEAR_PASSWORD:
         case GARDGET_DEVICE_ATTRIBUTE_CLEAR_FINGERPRINT:
-#endif
             attr->type = OCTDATATYPE_STRING;
             iots_strcpy(attr->value.String.String,Wifi_Door_Lock_Get_String_Attribute(attribute_id));//从串口得到门锁的属性并存储
             break;

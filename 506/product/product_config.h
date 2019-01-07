@@ -1,12 +1,11 @@
 #ifndef __PRODUCT_CFG_H__
 #define __PRODUCT_CFG_H__
 
-
-#ifndef ENADLE_FACTORY_MODE
-//#define ENADLE_FACTORY_MODE
-#endif
-
 #define POWER_CONTROL_INDIVIDUAL 1
+
+#ifndef ENADLE_GET_MCU_PASS_INFO
+//#define ENADLE_GET_MCU_PASS_INFO
+#endif
 
 #define false 0
 #define true 1
