@@ -38,16 +38,17 @@
 
 
 /*从MCU得到的帧类型*/
-#define MCU_INVALID_ACK_PACKAGE            (0x7f)//0x7f 表示不支持该命令,请不要再次发送命令.0x7f命令是MCU发送给WiFi模组
-#define MCU_ACK_PACKAGE                    (0x00)
-#define MCU_MODULE_START_INFO              (0x01)//启动模组是否启动cmd=01
-#define MCU_TIME_SERVICE_INFO              (0x02)//该数据包用于 MCU 向 WiFi 模组请求授时
-#define MCU_REPORT_DOOR_LOCK_INFO          (0x04)//该数据包用于 MCU 上报门锁状态
-#define MCU_RESET_COMMAND_INFO             (0x07)//该数据包用于 MCU 告诉 WiFi模组当前进行复位需要进入待配置状态
-#define MCU_DOOR_LOCK_DEPLOY_WITHDRAW_INFO (0x0a)//该数据包是 WiFi 模组和 MCU 之间通信， 设置/通知 布防/撤防-Deploy/withdraw
-#define MCU_DOOR_LOCK_REPORT_SETTING_INFO  (0x09)
+#define MCU_INVALID_ACK_PACKAGE                     (0x7f)//0x7f 表示不支持该命令,请不要再次发送命令.0x7f命令是MCU发送给WiFi模组
+#define MCU_ACK_PACKAGE                             (0x00)
+#define MCU_MODULE_START_INFO                       (0x01)//启动模组是否启动cmd=01
+#define MCU_TIME_SERVICE_INFO                       (0x02)//该数据包用于 MCU 向 WiFi 模组请求授时
+#define MCU_REPORT_DOOR_LOCK_INFO                   (0x04)//该数据包用于 MCU 上报门锁状态
+#define MCU_RESET_COMMAND_INFO                      (0x07)//该数据包用于 MCU 告诉 WiFi模组当前进行复位需要进入待配置状态
+#define MCU_DOOR_LOCK_DEPLOY_WITHDRAW_INFO          (0x0a)//该数据包是 WiFi 模组和 MCU 之间通信， 设置/通知 布防/撤防-Deploy/withdraw
+#define MCU_DOOR_LOCK_REPORT_SETTING_INFO           (0x09)
+#define MCU_DOOR_LOCK_REPORT_ELECTRIC_QUANTITY_INFO (0x0f)//该命令用于MCU主动上报电池电量,尤其是在电池电量低于一个阈值时,每次唤醒WiFi模组都需要上报电池电量
 #ifndef Wifi_Door_Lock_Open_Ignore_Event
-#define MCU_REVERSE_TIME_INFO              (0x03)
+#define MCU_REVERSE_TIME_INFO                       (0x03)
 #endif
 
 /*从WIFI模块发送到MCU的数据包类型*/
@@ -59,6 +60,7 @@
 #define DEVICE_OTA_APPLICATION_PACKAGE              (0x86)//该数据包用于WiFi模组告诉MCU当前准备进行OTA操作请180秒后才做强制断电
 #define DEVICE_WIFI_STATUS_REPORT_PACKAGE           (0x88)//该数据包用于 WiFi 模组将自己的状态给到MCU,MCU可以控制喇叭播放出来
 #define DEVICE_GET_DOOR_LOCK_SETTING_INFO_PACKAGE   (0x89)//该数据包是 WiFi 模组发送命令要求 MCU 上报门锁当前设置
+#define DEVICE_REQUEST_ELECTRIC_QUANTITY_PACKAGE    (0x8f)//WiFi模组请求门锁电池电量
 #ifndef Wifi_Door_Lock_Open_Ignore_Event
 #define DEVICE_REVERSE_TIME_PACKAGE                 (0x83)//该数据包用于 WiFi 模组向 MCU 请求授时,收到指令83,然后mcu发送数据包
 #define DEVICE_APPLICATION_DEPLOY_WITHDRAW_PACKAGE  (0x8b)//WiFi 模组申请布防/撤防数据包
@@ -68,13 +70,14 @@
 #endif
 
 /*事件类型*/
-#define TYPE_EVENT_MODULE_START                 (0x01)
-#define TYPE_EVENT_REQ_TIME                     (0x02)
-#define TYPE_EVENT_GET_TIME                     (0x03)
-#define TYPE_EVENT_REPORT_LOCK_STATUS           (0x04)
-#define TYPE_EVENT_RESET                        (0x07)
-#define TYPE_EVENT_REPORT_SETTING_INFO          (0x09)
-#define TYPE_EVENT_DEPLOY_WITHDRAW_INFO         (0x0a)
+#define TYPE_EVENT_MODULE_START                     (0x01)
+#define TYPE_EVENT_REQ_TIME                         (0x02)
+#define TYPE_EVENT_GET_TIME                         (0x03)
+#define TYPE_EVENT_REPORT_LOCK_STATUS               (0x04)
+#define TYPE_EVENT_RESET                            (0x07)
+#define TYPE_EVENT_REPORT_SETTING_INFO              (0x09)
+#define TYPE_EVENT_DEPLOY_WITHDRAW_INFO             (0x0a)
+#define TYPE_EVENT_REPORT_ELECTRIC_QUANTITY_INFO    (0x0f)
 
 /*联网状态*/
 #define NETWORK_CONFIGURE_DEVICE_STAR_SUCCESS           (0x00)//开始配置网络 WiFi模组已经进入到待配置网络状态
@@ -109,7 +112,7 @@ static COM_DEV_INT_ATTR_STRUCT s_Com_Dev_Int_Attr[]= {/*记录attribute，用于
     {0x000c0011, 0xFF},
     {0x000c0012, 0xFF},
     {0x000c0013, 0xFF},
-    {0x000c1001, 0xFF}
+    {0x000c1001, 0x00}
 };
 
 static COM_DEV_STRING_ATTR_STRUCT s_Com_Dev_String_Attr[]= {/*记录attribute，用于通过wifi上传*/
@@ -270,6 +273,7 @@ static void _Wifi_Door_Lock_Print_Frame(FRAME_STRUCT *frame,UINT8 frame_body_len
         case MCU_RESET_COMMAND_INFO:
         case MCU_DOOR_LOCK_DEPLOY_WITHDRAW_INFO:
         case MCU_DOOR_LOCK_REPORT_SETTING_INFO:
+        case MCU_DOOR_LOCK_REPORT_ELECTRIC_QUANTITY_INFO:
 #ifndef Wifi_Door_Lock_Open_Ignore_Event
         case MCU_REVERSE_TIME_INFO:
 #endif
@@ -308,6 +312,7 @@ static void _Wifi_Door_Lock_Print_Frame(FRAME_STRUCT *frame,UINT8 frame_body_len
         case DEVICE_OTA_APPLICATION_PACKAGE:
         case DEVICE_WIFI_STATUS_REPORT_PACKAGE:
         case DEVICE_GET_DOOR_LOCK_SETTING_INFO_PACKAGE:
+        case DEVICE_REQUEST_ELECTRIC_QUANTITY_PACKAGE:
 #ifndef Wifi_Door_Lock_Open_Ignore_Event
         case DEVICE_REVERSE_TIME_PACKAGE:
         case DEVICE_APPLICATION_DEPLOY_WITHDRAW_PACKAGE:
@@ -680,6 +685,11 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
         s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_WARNING;
         s_Com_Dev_Int_Attr[idx].value=RESET_FACTORY_SETTING;
         sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_WARNING, ASYNC_NOT_UPDATE_FLASH);
+    }else if(TYPE_EVENT_REPORT_ELECTRIC_QUANTITY_INFO==frame_info->frame_type){/*电池电量上报*/
+        idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL);
+        s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL;
+        s_Com_Dev_Int_Attr[idx].value=frame_info->body[0];
+        sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL, ASYNC_NOT_UPDATE_FLASH);
     }
 
 }
@@ -850,7 +860,7 @@ void Wifi_Consume_Queue_Data_Handle(void*arg1,void*arg2)
         PROTOCOL_DEBUG_PRINTF("initiative_resend_count=%d\n",initiative_resend_count);
         switch(receive_quent_data[0])
         {
-            case DEVICE_READY_PACKAGE:/*该数据包用于 WiFi 模组向 MCU 请求授时,收到指令83,然后mcu发送数据包*/
+            case DEVICE_READY_PACKAGE:/*该数据包用于 WiFi 模组向 MCU 请求授时,收到指令81,然后mcu发送数据包*/
                 _Wifi_Door_Lock_Send_Frame(receive_quent_data[0], &receive_quent_data[2], receive_quent_data[1],WIFI_EVENT_PACKAGE);
                 vTaskDelay(WIFI_READY_RESEND_TIMEOUT/portTICK_RATE_MS);
                 break;
@@ -871,8 +881,6 @@ void Wifi_Consume_Queue_Data_Handle(void*arg1,void*arg2)
                 break;
 
             case DEVICE_GET_DOOR_LOCK_SETTING_INFO_PACKAGE:/*该数据包是 WiFi 模组发送命令要求 MCU 上报门锁当前设置*/
-
-
 #ifdef ENADLE_GET_MCU_PASS_INFO
                 xSemaphoreTake(getpass_mutex, portMAX_DELAY);
 #endif
@@ -880,6 +888,11 @@ void Wifi_Consume_Queue_Data_Handle(void*arg1,void*arg2)
 #ifdef ENADLE_GET_MCU_PASS_INFO
                 xSemaphoreGive(getpass_mutex);
 #endif
+                vTaskDelay(INITIATIVE_RESEND_TIMEOUT/portTICK_RATE_MS);
+                break;
+
+            case DEVICE_REQUEST_ELECTRIC_QUANTITY_PACKAGE:/*该数据包用于 WiFi 模组告诉 MCU 获取电池电量了*/
+                _Wifi_Door_Lock_Send_Frame(receive_quent_data[0], &receive_quent_data[2], receive_quent_data[1],WIFI_EVENT_PACKAGE);
                 vTaskDelay(INITIATIVE_RESEND_TIMEOUT/portTICK_RATE_MS);
                 break;
 
@@ -1015,6 +1028,12 @@ static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info
 #endif
             break;
 
+        case TYPE_EVENT_REPORT_ELECTRIC_QUANTITY_INFO://wifi主动向mcu发送0x8f指令,mcu回复0x00,之后mcu会发送0x0f指令,wifi回复0x80
+            //将电池电量发送到云端
+            _Wifi_Door_Lock_Send_Frame(DEVICE_ACK_PACKAGE, NULL, 0,WIFI_ACK_PACKAGE);
+            _Wifi_Door_Lock_Cache_Attributes_Report_Cloud(frame_info);
+            break;
+
 #ifndef Wifi_Door_Lock_Open_Ignore_Event
         case TYPE_EVENT_GET_TIME:/*处理从MCU获取的时间*/
         {
@@ -1084,7 +1103,7 @@ static UINT8* _Uart_Malloc_Recv_Data(UINT32 size)
 /*****************************************************************************
 **函 数 名: _Uart_Data_Queue_Loading
 **输入参数: UINT8 *buf:接收的数据缓冲区
-           UINT32 size:接收的数据长度
+            UINT32 size:接收的数据长度
 **输出参数: 无
 **返 回 值: static
 **功能描述: 将数据送入消息队列
@@ -1190,6 +1209,10 @@ void Uart_Consume_Queue_Data_Handle(void*arg1,void*arg2)
 
                 case MCU_DOOR_LOCK_REPORT_SETTING_INFO:     /*MCU上报门锁的当前保存的状态到WIFI上*/
                     initiative_resend_count=0;
+                    _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(frame_info);
+                    break;
+
+                case MCU_DOOR_LOCK_REPORT_ELECTRIC_QUANTITY_INFO:     /*MCU上报门锁的当前电池电量到WIFI上*/
                     _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(frame_info);
                     break;
 
@@ -1346,6 +1369,8 @@ void Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(UINT8 event_type, UINT8 state)
         case IOTDM_EVENT_CREATEGADGET://创建creategadget事件,进行缓存数据上报
             wifi_connect_cloud_success = state;
             _Wifi_Door_Lock_Cache_Attributes_Report_Cloud(NULL);
+            _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_REQUEST_ELECTRIC_QUANTITY_PACKAGE, NULL, 0);//设备连云成功后获取mcu的电量
+
 #ifdef ENADLE_GET_MCU_PASS_INFO
             xTaskCreate(_Wifi_Door_Lock_Get_MCU_Pass_Task,"_Wifi_Door_Lock_Get_MCU_Pass_Task",512,NULL, 4,NULL);
 #endif
