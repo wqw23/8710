@@ -294,24 +294,11 @@ void Get_Gadgetid_Function(UINT8* arg)
  *****************************************************************************/
  void Wifi_Door_Lock_Handle_GetGadgetFunction_MsgAck(int isok, char *msg_type, cJSON *itemdata, void *param)
  {
-    cJSON *itemcode    = NULL;
-    cJSON *functions   = NULL;
-    cJSON *get_data    = NULL;
-    cJSON *tmp         = NULL;
-    cJSON *list        = NULL;
-    cJSON *object      = NULL;
-    cJSON *tmp1,*tmp2,*tmp3,*tmp4;
+    cJSON *itemcode,*functions,*get_data,*list,*object,*tmp,*tmp1,*tmp2,*tmp3,*tmp4;
+
     UINT8 i;
-    //UINT8 password_expiration_date[6] ={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-    UINT8 body_tmp[2]  ={0};
+    UINT8 body_tmp[3]  ={0};
     UINT8 password_body[14] ={0};
-    UINT8 password_expiration_date[] ="123456";
-
-    for(i=0;i<6;i++)
-        log_debug0("password_expiration_date[%d]=0x%x\n",i,password_expiration_date[i]-'0');
-
-    for(i=0;i<14;i++)
-        log_debug0("3333333333333333333333333333333333333333password_body[%d]=0x%x\n",i,password_body[i]);
 
     itemcode = cJSON_GetObjectItem(itemdata, "code");
     log_debug0("get function code:%d\n",itemcode->valueint);
@@ -328,9 +315,10 @@ void Get_Gadgetid_Function(UINT8* arg)
                 log_debug0("list no data\n");
             }else{
                 object = cJSON_GetArrayItem(list,0);//获取list[0]
-                log_debug0("list数组里面的内容=%s\n",cJSON_Print(object));
+                log_debug0("list data=%s\n",cJSON_Print(object));
                 tmp = cJSON_GetObjectItem(object,"unlock_opera");
                 log_debug0("unlock_opera:%d\n",tmp->valueint);
+
                 switch(tmp->valueint){
                     case UNLOCK_ADD_OPERA:
                         tmp1 = cJSON_GetObjectItem(object,"unlock_type");
@@ -342,54 +330,76 @@ void Get_Gadgetid_Function(UINT8* arg)
                             log_debug0("unlock_id:%d\n",tmp3->valueint);
                             password_body[0]=tmp3->valueint;
                             password_body[1]=0x00;//密码加密方法 0x00表示明文,0x01表示MD5的密文
-                            iots_strncpy(&password_body[2],tmp2->valuestring,6);
-                            iots_strncpy(&password_body[8],password_expiration_date,6);//密码有效截止时间,全0xff表示一直有效
-                            _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_APPLICATION_ADD_PASSWORD_PACKAGE, password_body, 14);
-
-                        }else{//指纹、IC卡类型
-
+                            for(i=2;i<14;i++){
+                                if(i>=8){
+                                    password_body[i]=0xFF;//密码有效截止时间,全0xff表示一直有效
+                                }else{
+                                    password_body[i]=tmp2->valuestring[i-2]-'0';
+                                }
+                            }
+                            _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_APPLICATION_ADD_PASSWORD_PACKAGE, password_body,14);
                         }
                         break;
 
                     case UNLOCK_DELETE_OPERA:
-                        if(!strcmp(tmp->valuestring,PASSWORD_OPERA)){//密码类型       0x00 密码 0x01 指纹 0x02 IC 卡
+                        tmp1 = cJSON_GetObjectItem(object,"unlock_type");
+                        log_debug0("unlock_type:%d\n",tmp1->valueint);
+                        if(!strcmp(tmp1->valuestring,PASSWORD_OPERA)){//密码类型       0x00 密码 0x01 指纹 0x02 IC 卡
                             body_tmp[0]=0;
                         }else if(!strcmp(tmp->valuestring,FINGERPRINT_OPERA)){
                             body_tmp[0]=1;
                         }else{
                             body_tmp[0]=2;
                         }
-                        object = cJSON_GetArrayItem(list,LIST_UNLOCK_TYPE); //获取操作类型(指纹密码IC卡)
-                        tmp = cJSON_GetObjectItem(object,"unlock_type");
-                        log_debug0("unlock_type:%s\n",tmp->valuestring);
-
-                        object = cJSON_GetArrayItem(list,LIST_UNLOCK_ID);
-                        tmp = cJSON_GetObjectItem(object,"unlock_id");      //获取编号
-                        log_debug0("unlock_id:%d\n",tmp->valueint);
-                        body_tmp[1]=tmp->valueint;
-                        _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_APPLICATION_DEL_PASSWORD_FINGERPRINT_IC_PACKAGE, body_tmp, 2);
+                        tmp2 = cJSON_GetObjectItem(object,"unlock_id");
+                        log_debug0("unlock_id:%d\n",tmp2->valueint);
+                        body_tmp[1]=tmp2->valueint-'0';
+                        body_tmp[2]=0;
+                        _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_APPLICATION_DEL_PASSWORD_FINGERPRINT_IC_PACKAGE, body_tmp, 3);
                         break;
 
                     case UNLOCK_MODIFY_OPERA:
+                        tmp1 = cJSON_GetObjectItem(object,"unlock_type");
+                        log_debug0("unlock_type:%d\n",tmp1->valueint);
+                        if(!strcmp(tmp1->valuestring,PASSWORD_OPERA)){//密码类型
+                            tmp2 = cJSON_GetObjectItem(object,"unlock_value");
+                            log_debug0("unlock_value:%s\n",tmp2->valuestring);
+                            tmp3 = cJSON_GetObjectItem(object,"unlock_id");
+                            log_debug0("unlock_id:%d\n",tmp3->valueint);
+                            password_body[0]=tmp3->valueint;
+                            password_body[1]=0x00;//密码加密方法 0x00表示明文,0x01表示MD5的密文
+                            for(i=2;i<14;i++){
+                                if(i>=8){
+                                    password_body[i]=0xFF;//密码有效截止时间,全0xff表示一直有效
+                                }else{
+                                    password_body[i]=tmp2->valuestring[i-2]-'0';
+                                }
+                            }
+                            _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_APPLICATION_ADD_PASSWORD_PACKAGE, password_body,14);
+                        }
                         break;
 
                     default:
                         break;
                 }
-
             }
-
         }
     }
 
     log_debug0("44444444444444444444444444444=====%s\n",(UINT8*)cJSON_Print(itemdata));
 
-    cJSON_Delete(object);
+    cJSON_Delete(tmp4);
+    cJSON_Delete(tmp3);
+    cJSON_Delete(tmp2);
+    cJSON_Delete(tmp1);
     cJSON_Delete(tmp);
+    cJSON_Delete(object);
     cJSON_Delete(list);
-    cJSON_Delete(functions);
     cJSON_Delete(get_data);
+    cJSON_Delete(functions);
     cJSON_Delete(itemcode);
+
+    log_debug0("00000000000000000000000000000000000000000000000\n");
  }
 
  /*****************************************************************************
