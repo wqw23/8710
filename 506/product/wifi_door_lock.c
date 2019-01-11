@@ -19,6 +19,7 @@
 #include "time.h"
 #include "timer_api.h"
 #include "lwip/def.h"
+#include "cJSON.h"
 //IOT SDK head
 #include "iotdevice.h"
 #include "log.h"
@@ -44,12 +45,15 @@
 #define MCU_TIME_SERVICE_INFO                       (0x02)//该数据包用于 MCU 向 WiFi 模组请求授时
 #define MCU_REPORT_DOOR_LOCK_INFO                   (0x04)//该数据包用于 MCU 上报门锁状态
 #define MCU_RESET_COMMAND_INFO                      (0x07)//该数据包用于 MCU 告诉 WiFi模组当前进行复位需要进入待配置状态
-#define MCU_DOOR_LOCK_DEPLOY_WITHDRAW_INFO          (0x0a)//该数据包是 WiFi 模组和 MCU 之间通信， 设置/通知 布防/撤防-Deploy/withdraw
 #define MCU_DOOR_LOCK_REPORT_SETTING_INFO           (0x09)
+#define MCU_DOOR_LOCK_DEPLOY_WITHDRAW_INFO          (0x0a)//该数据包是 WiFi 模组和 MCU 之间通信， 设置/通知 布防/撤防-Deploy/withdraw
+#define MCU_DOOR_LOCK_REPORT_ADD_INFO               (0x0c)//MCU 上报添加密码/指纹/IC 卡
+#define MCU_DOOR_LOCK_REPORT_DELETE_INFO            (0x0d)//MCU 上报删除密码/指纹/IC 卡
 #define MCU_DOOR_LOCK_REPORT_ELECTRIC_QUANTITY_INFO (0x0f)//该命令用于MCU主动上报电池电量,尤其是在电池电量低于一个阈值时,每次唤醒WiFi模组都需要上报电池电量
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
+#define MCU_DOOR_LOCK_REPORT_SERIAL_CODE_INFO       (0x10)//WIFI请求门锁串码时,mcu回复0x10响应
+
 #define MCU_REVERSE_TIME_INFO                       (0x03)
-#endif
+
 
 /*从WIFI模块发送到MCU的数据包类型*/
 #define DEVICE_INVALID_ACK_PACKAGE                  (0xff)//0xff表示不支持该命令,请不要再次发送命令.0xff命令是WiFi模组发送给MCU
@@ -61,13 +65,14 @@
 #define DEVICE_WIFI_STATUS_REPORT_PACKAGE           (0x88)//该数据包用于 WiFi 模组将自己的状态给到MCU,MCU可以控制喇叭播放出来
 #define DEVICE_GET_DOOR_LOCK_SETTING_INFO_PACKAGE   (0x89)//该数据包是 WiFi 模组发送命令要求 MCU 上报门锁当前设置
 #define DEVICE_REQUEST_ELECTRIC_QUANTITY_PACKAGE    (0x8f)//WiFi模组请求门锁电池电量
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
+#define DEVICE_REQUEST_SERIAL_CODE_PACKAGE          (0x90)//WiFi模组请求门锁串码
+
 #define DEVICE_REVERSE_TIME_PACKAGE                 (0x83)//该数据包用于 WiFi 模组向 MCU 请求授时,收到指令83,然后mcu发送数据包
 #define DEVICE_APPLICATION_DEPLOY_WITHDRAW_PACKAGE  (0x8b)//WiFi 模组申请布防/撤防数据包
 #define DEVICE_APPLICATION_ADD_PASSWORD_PACKAGE     (0x8c)//WiFi 模组申请添加密码
 #define DEVICE_APPLICATION_DEL_PASSWORD_FINGERPRINT_IC_PACKAGE   (0x8d)//WiFi 模组申请删除密码/指纹/IC 卡
 #define DEVICE_APPLICATION_TIME_START_WIFI_PACKAGE  (0x8e)//WiFi 模组申请定时启动 WiFi 模组
-#endif
+
 
 /*事件类型*/
 #define TYPE_EVENT_MODULE_START                     (0x01)
@@ -77,7 +82,10 @@
 #define TYPE_EVENT_RESET                            (0x07)
 #define TYPE_EVENT_REPORT_SETTING_INFO              (0x09)
 #define TYPE_EVENT_DEPLOY_WITHDRAW_INFO             (0x0a)
+#define TYPE_EVENT_REPORT_ADD_INFO                  (0x0c)
+#define TYPE_EVENT_REPORT_DELETE_INFO               (0x0d)
 #define TYPE_EVENT_REPORT_ELECTRIC_QUANTITY_INFO    (0x0f)
+#define TYPE_EVENT_REPORT_SERIAL_CODE_INFO          (0x10)
 
 /*联网状态*/
 #define NETWORK_CONFIGURE_DEVICE_STAR_SUCCESS           (0x00)//开始配置网络 WiFi模组已经进入到待配置网络状态
@@ -119,7 +127,10 @@ static COM_DEV_STRING_ATTR_STRUCT s_Com_Dev_String_Attr[]= {/*记录attribute，
     {0x000c0009, "0xFF,0xFF"},
     {0x000c000c, "0xFF,0xFF"},
     {0x000c000d, "0xFF,0xFF"},
-    {0x000c0010, "0xFF,0xFF"}
+    {0x000c0010, "0xFF,0xFF"},
+    {0x000c0015, "0xFF,0xFF"},
+    {0x000c0016, "0xFF,0xFF"},
+    {0x000c0014, "0xFF,0xFF"}
 };
 
 /*用于表明发送事件包的类型*/
@@ -169,9 +180,9 @@ enum
 /*门锁设置状态上报-Confiuence*/
 enum
 {
-    SETTING_PASSWORD= 0,    /*设置密码*/
-    SETTING_FINGERPRINT,    /*设置指纹*/
-    SETTING_CARD,           /*设置卡*/
+    PASSWORD_EVENT= 0,    /*密码事件*/
+    FINGERPRINT_EVENT,    /*指纹事件*/
+    CARD_EVENT,           /*卡事件*/
 };
 
 /*提醒时用于表明锁的数据类型*/
@@ -206,16 +217,38 @@ enum
     DISARMING = 1,              /*撤防*/
 };
 
-//=======================================================
+/*用于表明getfunction的list数组成员的编号*/
+enum
+{
+    LIST_UNLOCK_ID     =0,           /*指纹/密码/卡片编号*/
+    LIST_UNLOCK_TYPE   =1,           /*三种 fingerprint, password, card*/
+    LIST_UNLOCK_OPERA  =2,           /*0:add ; 1:delete; 2: modify*/
+    LIST_UNLOCK_VALUE  =3,           /*密码的value, 其他为空或者不传*/
+};
+/*用于表明getfunction的三种操作类型*/
+#define  FINGERPRINT_OPERA  "fingerprint"
+#define  PASSWORD_OPERA     "password"
+#define  CARD_OPERA         "card"
 
+/*用于表明getfunction的某种操作类型的具体操作*/
+enum
+{
+    UNLOCK_ADD_OPERA        =0,     /*添加操作*/
+    UNLOCK_DELETE_OPERA     =1,     /*删除操作*/
+    UNLOCK_MODIFY_OPERA     =2,     /*修改操作*/
+};
+
+//=======================================================
+#define WIFI_DOOR_LOCK_FUNCTION_KEY     (0x10000401)/*WIFI门锁的function key*/
 #define RECV_QUEUE_BUF_SIZE             (128)       /*接收消息队列缓冲区大小*/
 #define TIMEOUT_SEND_COUNT              (5)         /*超时发送次数*/
-#define INITIATIVE_RESEND_TIMEOUT       (3 * 100)  /*软件定时器超时时间-300MS*/
+#define INITIATIVE_RESEND_TIMEOUT       (3 * 100)   /*软件定时器超时时间-300MS*/
 #define WIFI_READY_RESEND_TIMEOUT       (10 * 100)  /*WIFI_ready超时时间-1000MS*/
 #define MESSAGE_QUEUE_COUNT             (10)        /*申请消息队列的个数*/
 #define BODY_PASSWORD_DATA_HEAD         (2)         /*body中储存密码信息的前几个字节,从body[2]开始是存储的是密码编号*/
 #define GET_PASSWORD_TYPE_NUM           (3)         /*获取MCU中储存密码的类型个数:密码,指纹,IC卡*/
 #define DELAY_TIME_GET_MCU_PASS         (30 * 100)  /*延时3000MS去获取mcu的密码*/
+#define RECV_SERIAL_CODE_SIZE           (15)        /*接收串码数据的大小*/
 
 UINT8 Seq_Number=0;                                 /*记录wifi主动向mcu发送的序包*/
 UINT8 Mcu_Seq_Number=0;                             /*记录mcu主动向wifi发送的序包*/
@@ -233,6 +266,158 @@ UINT8 wifi_enter_softap = 0;                        /*wifi模组成功连接到�
 #ifdef ENADLE_GET_MCU_PASS_INFO
 xSemaphoreHandle getpass_mutex;                     /*给0x89指令上报云端密码信息加锁,密码过多上报时间可能超过300ms,防止重复发送*/
 #endif
+UINT8 mcu_serial_code[RECV_SERIAL_CODE_SIZE] = {0}; /*保存mcu串码*/
+UINT8 gadgetid[64]={0};                             /*记录设备的gadgetid*/
+
+void _Wifi_Door_Lock_Data_Queue_Loading(UINT8 frame_type, UINT8 *body, UINT16 body_len);
+
+/*****************************************************************************
+**函 数 名: Get_Gadgetid_Function
+**输入参数: UINT8* gadgetid
+**输出参数: 无
+**返 回 值: Get_Gadgetid_Function
+**功能描述: 获取adgetid
+**作     者: wqw
+*****************************************************************************/
+void Get_Gadgetid_Function(UINT8* arg)
+{
+    iots_strcpy(gadgetid,arg);
+}
+
+ /*****************************************************************************
+ **函 数 名: Wifi_Door_Lock_Handle_GetGadgetFunction_MsgAck
+ **输入参数: int isok, char *msg_type, cJSON *itemdata, void *param
+ **输出参数: 无
+ **返 回 值:
+ **功能描述: get_function的回调函数
+ **作     者: wqw
+ *****************************************************************************/
+ void Wifi_Door_Lock_Handle_GetGadgetFunction_MsgAck(int isok, char *msg_type, cJSON *itemdata, void *param)
+ {
+    cJSON *itemcode    = NULL;
+    cJSON *functions   = NULL;
+    cJSON *get_data    = NULL;
+    cJSON *tmp         = NULL;
+    cJSON *list        = NULL;
+    cJSON *object      = NULL;
+    cJSON *tmp1,*tmp2,*tmp3,*tmp4;
+    UINT8 i;
+    //UINT8 password_expiration_date[6] ={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    UINT8 body_tmp[2]  ={0};
+    UINT8 password_body[14] ={0};
+    UINT8 password_expiration_date[] ="123456";
+
+    for(i=0;i<6;i++)
+        log_debug0("password_expiration_date[%d]=0x%x\n",i,password_expiration_date[i]-'0');
+
+    for(i=0;i<14;i++)
+        log_debug0("3333333333333333333333333333333333333333password_body[%d]=0x%x\n",i,password_body[i]);
+
+    itemcode = cJSON_GetObjectItem(itemdata, "code");
+    log_debug0("get function code:%d\n",itemcode->valueint);
+
+    if(!itemcode->valueint){//code值返回0-成功进行下面的操作
+        functions = cJSON_GetObjectItem(itemdata, "functions");
+        get_data =cJSON_GetObjectItem(functions,"gadget_id");
+        log_debug0("get_data->valuestring:%s\n",get_data->valuestring);
+
+        if(!strcmp(get_data->valuestring,gadgetid)){
+            list=cJSON_GetObjectItem(get_data,"list");
+            if( list != NULL)
+            {
+                log_debug0("list no data\n");
+            }else{
+                object = cJSON_GetArrayItem(list,0);//获取list[0]
+                log_debug0("list数组里面的内容=%s\n",cJSON_Print(object));
+                tmp = cJSON_GetObjectItem(object,"unlock_opera");
+                log_debug0("unlock_opera:%d\n",tmp->valueint);
+                switch(tmp->valueint){
+                    case UNLOCK_ADD_OPERA:
+                        tmp1 = cJSON_GetObjectItem(object,"unlock_type");
+                        log_debug0("unlock_type:%d\n",tmp1->valueint);
+                        if(!strcmp(tmp1->valuestring,PASSWORD_OPERA)){//密码类型
+                            tmp2 = cJSON_GetObjectItem(object,"unlock_value");
+                            log_debug0("unlock_value:%s\n",tmp2->valuestring);
+                            tmp3 = cJSON_GetObjectItem(object,"unlock_id");
+                            log_debug0("unlock_id:%d\n",tmp3->valueint);
+                            password_body[0]=tmp3->valueint;
+                            password_body[1]=0x00;//密码加密方法 0x00表示明文,0x01表示MD5的密文
+                            iots_strncpy(&password_body[2],tmp2->valuestring,6);
+                            iots_strncpy(&password_body[8],password_expiration_date,6);//密码有效截止时间,全0xff表示一直有效
+                            _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_APPLICATION_ADD_PASSWORD_PACKAGE, password_body, 14);
+
+                        }else{//指纹、IC卡类型
+
+                        }
+                        break;
+
+                    case UNLOCK_DELETE_OPERA:
+                        if(!strcmp(tmp->valuestring,PASSWORD_OPERA)){//密码类型       0x00 密码 0x01 指纹 0x02 IC 卡
+                            body_tmp[0]=0;
+                        }else if(!strcmp(tmp->valuestring,FINGERPRINT_OPERA)){
+                            body_tmp[0]=1;
+                        }else{
+                            body_tmp[0]=2;
+                        }
+                        object = cJSON_GetArrayItem(list,LIST_UNLOCK_TYPE); //获取操作类型(指纹密码IC卡)
+                        tmp = cJSON_GetObjectItem(object,"unlock_type");
+                        log_debug0("unlock_type:%s\n",tmp->valuestring);
+
+                        object = cJSON_GetArrayItem(list,LIST_UNLOCK_ID);
+                        tmp = cJSON_GetObjectItem(object,"unlock_id");      //获取编号
+                        log_debug0("unlock_id:%d\n",tmp->valueint);
+                        body_tmp[1]=tmp->valueint;
+                        _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_APPLICATION_DEL_PASSWORD_FINGERPRINT_IC_PACKAGE, body_tmp, 2);
+                        break;
+
+                    case UNLOCK_MODIFY_OPERA:
+                        break;
+
+                    default:
+                        break;
+                }
+
+            }
+
+        }
+    }
+
+    log_debug0("44444444444444444444444444444=====%s\n",(UINT8*)cJSON_Print(itemdata));
+
+    cJSON_Delete(object);
+    cJSON_Delete(tmp);
+    cJSON_Delete(list);
+    cJSON_Delete(functions);
+    cJSON_Delete(get_data);
+    cJSON_Delete(itemcode);
+ }
+
+ /*****************************************************************************
+ **函 数 名: _Wifi_Door_Lock_Get_GadgetFunction_to_Cloud
+ **输入参数: 无
+ **输出参数: 无
+ **返 回 值:
+ **功能描述: get_function的接口
+ **作     者: wqw
+ *****************************************************************************/
+ void _Wifi_Door_Lock_Get_GadgetFunction_to_Cloud(void)
+ {
+    cJSON *send_data_package = cJSON_CreateObject();
+
+    if( send_data_package == NULL)
+    {
+        log_debug0("insufficient memory\n");
+        return;
+    }
+
+    cJSON_AddStringToObject(send_data_package,"function_type","get_unlock_id_change");
+    cJSON_AddStringToObject(send_data_package,"gadget_id",gadgetid);
+
+    log_debug0("22222222222222222222222222222222222222222222 get_condition = %s\n",(UINT8*)cJSON_Print(send_data_package));
+
+    IOTCloud_GetGadgetFunction(WIFI_DOOR_LOCK_FUNCTION_KEY,send_data_package,Wifi_Door_Lock_Handle_GetGadgetFunction_MsgAck,NULL);
+    cJSON_Delete(send_data_package);
+ }
 
 /*****************************************************************************
 **函 数 名: Wifi_Door_Lock_Enter_Softap
@@ -274,9 +459,10 @@ static void _Wifi_Door_Lock_Print_Frame(FRAME_STRUCT *frame,UINT8 frame_body_len
         case MCU_DOOR_LOCK_DEPLOY_WITHDRAW_INFO:
         case MCU_DOOR_LOCK_REPORT_SETTING_INFO:
         case MCU_DOOR_LOCK_REPORT_ELECTRIC_QUANTITY_INFO:
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
+        case MCU_DOOR_LOCK_REPORT_SERIAL_CODE_INFO:
+        case MCU_DOOR_LOCK_REPORT_ADD_INFO:
+        case MCU_DOOR_LOCK_REPORT_DELETE_INFO:
         case MCU_REVERSE_TIME_INFO:
-#endif
         {
             log_debug0("Frame crc:%02x\n", frame->crc);
             log_debug0("Frame len:%02x\n", frame->length);
@@ -313,13 +499,12 @@ static void _Wifi_Door_Lock_Print_Frame(FRAME_STRUCT *frame,UINT8 frame_body_len
         case DEVICE_WIFI_STATUS_REPORT_PACKAGE:
         case DEVICE_GET_DOOR_LOCK_SETTING_INFO_PACKAGE:
         case DEVICE_REQUEST_ELECTRIC_QUANTITY_PACKAGE:
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
+        case DEVICE_REQUEST_SERIAL_CODE_PACKAGE:
         case DEVICE_REVERSE_TIME_PACKAGE:
         case DEVICE_APPLICATION_DEPLOY_WITHDRAW_PACKAGE:
         case DEVICE_APPLICATION_ADD_PASSWORD_PACKAGE:
         case DEVICE_APPLICATION_DEL_PASSWORD_FINGERPRINT_IC_PACKAGE:
         case DEVICE_APPLICATION_TIME_START_WIFI_PACKAGE:
-#endif
         {
             INT8 *temp_buf = NULL;
             UINT16 real_len = frame_body_len;
@@ -356,43 +541,62 @@ static void _Wifi_Door_Lock_Print_Frame(FRAME_STRUCT *frame,UINT8 frame_body_len
 }
 
 /*****************************************************************************
-**函 数 名: __Air_Find_Attribute_Index
+**函 数 名: Wifi_Door_Lock_Get_SERIAL_CODE_From_MCU
+**输入参数: 无
+**输出参数: 无
+**返 回 值: serial_code
+**功能描述: 获取mcu的串码
+**作     者: wqw
+*****************************************************************************/
+UINT8* Wifi_Door_Lock_Get_SERIAL_CODE_From_MCU(void)
+{
+    return mcu_serial_code;
+}
+
+/*****************************************************************************
+**函 数 名: _Wifi_Door_Lock_Find_Int_Attribute_Index
 **输入参数: const u8 id:属性ID
 **输出参数: 无
 **返 回 值: static
 **功能描述: 查找对应的属性ID
 **作     者: wqw
 *****************************************************************************/
-INT32 _Wifi_Door_Lock_Find_Attribute_Index(UINT32 id)
+INT32 _Wifi_Door_Lock_Find_Int_Attribute_Index(UINT32 id)
 {
     UINT32 i = 0;
 
-    if(id < 0x000c0009)
+    for(i = 0; i <sizeof(s_Com_Dev_Int_Attr)/sizeof(COM_DEV_INT_ATTR_STRUCT); i++)
     {
-        for(i = 0; i < 3; i++)
+        if(s_Com_Dev_Int_Attr[i].id == id)
         {
-            if(s_Com_Dev_Int_Attr[i].id == id)
-            {
-                return i;
-            }
-        }
-    }else if(id > 0x000c0010){
-        for(i = 3; i <sizeof(s_Com_Dev_Int_Attr)/sizeof(COM_DEV_INT_ATTR_STRUCT); i++)
-        {
-            if(s_Com_Dev_Int_Attr[i].id == id)
-            {
-                return i;
-            }
-        }
-    }else{
-        for(i = 0; i < sizeof(s_Com_Dev_String_Attr)/sizeof(COM_DEV_STRING_ATTR_STRUCT); i++)
-        {
-            if(s_Com_Dev_String_Attr[i].id == id)
-            {
-                return i;
-            }
+            return i;
         }
     }
+
+    log_debug0("FindAttributeIndex Error id = %2X\n", id);
+    return -1;
+}
+
+/*****************************************************************************
+**函 数 名: _Wifi_Door_Lock_Find_String_Attribute_Index
+**输入参数: const u8 id:属性ID
+**输出参数: 无
+**返 回 值: static
+**功能描述: 查找对应的属性ID
+**作     者: wqw
+*****************************************************************************/
+INT32 _Wifi_Door_Lock_Find_String_Attribute_Index(UINT32 id)
+{
+    UINT32 i = 0;
+
+    for(i = 0; i < sizeof(s_Com_Dev_String_Attr)/sizeof(COM_DEV_STRING_ATTR_STRUCT); i++)
+    {
+        if(s_Com_Dev_String_Attr[i].id == id)
+        {
+            return i;
+        }
+    }
+
     log_debug0("FindAttributeIndex Error id = %2X\n", id);
     return -1;
 }
@@ -491,7 +695,7 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
                 case CARD_USER:
                 case KEY_USER:
                 case MOBILE_PHONE_USER:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_OFFON);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_OFFON);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_OFFON;
                     s_Com_Dev_Int_Attr[idx].value=LOCK_CLOSE;
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_OFFON, ASYNC_NOT_UPDATE_FLASH);
@@ -501,7 +705,7 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
                     break;
             }
         }else if(LOCK_OPEN==frame_info->body[0]){/*打开*/
-            idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_OFFON);
+            idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_OFFON);
             s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_OFFON;
             s_Com_Dev_Int_Attr[idx].value=LOCK_OPEN;
             sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_OFFON, ASYNC_NOT_UPDATE_FLASH);
@@ -513,28 +717,28 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
                     break;
 
                 case FINGERPRINT_USER:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_FINGERPRINT);
-                    s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_FINGERPRINT;
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_FINGERPRINT);
+                    s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_FINGERPRINT;//01 00 01 00 01 大端存储
                     s_Com_Dev_Int_Attr[idx].value=((frame_info->body[3]<<8 |frame_info->body[4])+1);
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_FINGERPRINT, ASYNC_NOT_UPDATE_FLASH);
                     break;
 
                 case PASSWORD_USER:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_PASSWORD);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_PASSWORD);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_PASSWORD;
                     s_Com_Dev_Int_Attr[idx].value=((frame_info->body[3]<<8 |frame_info->body[4])+1);
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_PASSWORD, ASYNC_NOT_UPDATE_FLASH);
                     break;
 
                 case CARD_USER:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_CAR);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_CAR);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_CAR;
                     s_Com_Dev_Int_Attr[idx].value=((frame_info->body[3]<<8 |frame_info->body[4])+1);
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_CAR, ASYNC_NOT_UPDATE_FLASH);
                     break;
 
                 case KEY_USER:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_KEY);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_KEY);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_KEY;
                     s_Com_Dev_Int_Attr[idx].value=LOCK_OPEN;
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_KEY, ASYNC_NOT_UPDATE_FLASH);
@@ -555,7 +759,7 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
             {
                 case SMART_LOCK_IS_SMASHED:
                 case FORCIBLY_OPEN_LOCK:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_WARNING;
                     s_Com_Dev_Int_Attr[idx].value=VIOLENCE_OPEN_LOCK;
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_WARNING, ASYNC_NOT_UPDATE_FLASH);
@@ -565,7 +769,7 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
                 case PASSWORD_IS_FROZEN:
                 case CARD_IS_FROZEN:
                 case KEY_IS_FROZEN:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_WARNING;
                     s_Com_Dev_Int_Attr[idx].value=PASSWORD_ERROR_OVERFLOW;
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_WARNING, ASYNC_NOT_UPDATE_FLASH);
@@ -613,12 +817,12 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
                     break;
 
                 case LOW_BATTERY_REMINDER:
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_WARNING;
                     s_Com_Dev_Int_Attr[idx].value=LOW_POWER_ALAEM;
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_WARNING, ASYNC_NOT_UPDATE_FLASH);
 
-                    idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL);
+                    idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL);
                     s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL;
                     s_Com_Dev_Int_Attr[idx].value=frame_info->body[2];
                     sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL, ASYNC_NOT_UPDATE_FLASH);
@@ -640,9 +844,9 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
             //sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD, ASYNC_NOT_UPDATE_FLASH);
         }
     }else if(TYPE_EVENT_REPORT_SETTING_INFO==frame_info->frame_type){
-        if(SETTING_PASSWORD==frame_info->body[0])/*获取设置密码*/
+        if(PASSWORD_EVENT==frame_info->body[0])/*获取设置密码*/
         {
-            idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD);
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD);
             s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD;
 
             for(count=0;count<password_bytes_num*8;count++){//逐步分析每一个字节的每一位的值
@@ -658,8 +862,8 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
                 }
             }
 
-        }else if(SETTING_FINGERPRINT==frame_info->body[0]){/*获取设置指纹*/
-            idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT);
+        }else if(FINGERPRINT_EVENT==frame_info->body[0]){/*获取设置指纹*/
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT);
             s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT;
 
             for(count=0;count<password_bytes_num*8;count++){//逐步分析每一个字节的每一位的值
@@ -670,28 +874,85 @@ void _Wifi_Door_Lock_Deal_Attributes_Report_Cloud(FRAME_STRUCT* frame_info)
 
                 frame_info->body[BODY_PASSWORD_DATA_HEAD+subscript]=frame_info->body[BODY_PASSWORD_DATA_HEAD+subscript]>>1;
 
-                if((count+1)%8==0){
+                if(!((count+1)%8)){
                     subscript++;
                 }
             }
 
-        }else if(SETTING_CARD==frame_info->body[0]){/*获取设置卡*/
+        }else if(CARD_EVENT==frame_info->body[0]){/*获取设置卡*/
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_CARD);
+            s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_SET_CARD;
+
+            for(count=0;count<password_bytes_num*8;count++){//逐步分析每一个字节的每一位的值
+            if((frame_info->body[BODY_PASSWORD_DATA_HEAD+subscript])&0x01){
+            s_Com_Dev_String_Attr[idx].value=_Wifi_Door_Lock_String_Concatenation(count,0);
+            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_SET_CARD, ASYNC_NOT_UPDATE_FLASH);
+            }
+
+            frame_info->body[BODY_PASSWORD_DATA_HEAD+subscript]=frame_info->body[BODY_PASSWORD_DATA_HEAD+subscript]>>1;
+
+            if(!((count+1)%8)){
+                subscript++;
+            }
+        }
 #ifdef ENADLE_GET_MCU_PASS_INFO
             vSemaphoreDelete(getpass_mutex);
 #endif
         }
     }else if(TYPE_EVENT_RESET==frame_info->frame_type){/*恢复出厂设置*/
-        idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
+        idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_WARNING);
         s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_WARNING;
         s_Com_Dev_Int_Attr[idx].value=RESET_FACTORY_SETTING;
         sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_WARNING, ASYNC_NOT_UPDATE_FLASH);
     }else if(TYPE_EVENT_REPORT_ELECTRIC_QUANTITY_INFO==frame_info->frame_type){/*电池电量上报*/
-        idx=_Wifi_Door_Lock_Find_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL);
+        idx=_Wifi_Door_Lock_Find_Int_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL);
         s_Com_Dev_Int_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL;
         s_Com_Dev_Int_Attr[idx].value=frame_info->body[0];
         sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_BATTERY_LEVEL, ASYNC_NOT_UPDATE_FLASH);
-    }
+    }else if(TYPE_EVENT_REPORT_ADD_INFO==frame_info->frame_type){/*MUC添加密码指纹IC卡上报*/
+        if(PASSWORD_EVENT==frame_info->body[0])/*获取添加密码编号*/
+        {
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD);
+            s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD;//00 02 00//小端存储
+            s_Com_Dev_String_Attr[idx].value=_Wifi_Door_Lock_String_Concatenation(((frame_info->body[2]<<8 | frame_info->body[1])+1),frame_info->body[3]);
+            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD, ASYNC_NOT_UPDATE_FLASH);
 
+        }else if(FINGERPRINT_EVENT==frame_info->body[0]){/*获取添加指纹编号*/
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT);
+            s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT;
+            s_Com_Dev_String_Attr[idx].value=_Wifi_Door_Lock_String_Concatenation(((frame_info->body[2]<<8 | frame_info->body[1])+1),frame_info->body[3]);
+            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT, ASYNC_NOT_UPDATE_FLASH);
+        }else if(CARD_EVENT==frame_info->body[0]){/*获取添加卡编号*/
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_SET_CARD);
+            s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_SET_CARD;
+            s_Com_Dev_String_Attr[idx].value=_Wifi_Door_Lock_String_Concatenation(((frame_info->body[2]<<8 | frame_info->body[1])+1),frame_info->body[3]);
+            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_SET_CARD, ASYNC_NOT_UPDATE_FLASH);
+        }
+    }else if(TYPE_EVENT_REPORT_DELETE_INFO==frame_info->frame_type){/*MUC删除密码指纹IC卡上报*/
+        if(PASSWORD_EVENT==frame_info->body[0])/*删除密码编号*/
+        {
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_CLEAR_PASSWORD);
+            s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_CLEAR_PASSWORD;//00 02 00//小端存储
+            s_Com_Dev_String_Attr[idx].value=_Wifi_Door_Lock_String_Concatenation(((frame_info->body[2]<<8 | frame_info->body[1])+1),frame_info->body[3]);
+            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_CLEAR_PASSWORD, ASYNC_NOT_UPDATE_FLASH);
+
+        }else if(FINGERPRINT_EVENT==frame_info->body[0]){/*删除指纹编号*/
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_CLEAR_FINGERPRINT);
+            s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_CLEAR_FINGERPRINT;
+            s_Com_Dev_String_Attr[idx].value=_Wifi_Door_Lock_String_Concatenation(((frame_info->body[2]<<8 | frame_info->body[1])+1),frame_info->body[3]);
+            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_CLEAR_FINGERPRINT, ASYNC_NOT_UPDATE_FLASH);
+        }else if(CARD_EVENT==frame_info->body[0]){/*删除IC卡编号*/
+            idx=_Wifi_Door_Lock_Find_String_Attribute_Index(GARDGET_DEVICE_ATTRIBUTE_CLEAR_CARD);
+            s_Com_Dev_String_Attr[idx].id=GARDGET_DEVICE_ATTRIBUTE_CLEAR_CARD;
+            s_Com_Dev_String_Attr[idx].value=_Wifi_Door_Lock_String_Concatenation(((frame_info->body[2]<<8 | frame_info->body[1])+1),frame_info->body[3]);
+            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_CLEAR_CARD, ASYNC_NOT_UPDATE_FLASH);
+        }
+    }else if(TYPE_EVENT_REPORT_SERIAL_CODE_INFO==frame_info->frame_type){/*获取门锁串码上报*/
+        log_debug0("frame_info->body=%s\n",frame_info->body);
+        iots_strncpy(mcu_serial_code,frame_info->body,RECV_SERIAL_CODE_SIZE);
+        log_debug0("mcu_serial_code=%s\n",mcu_serial_code);
+        sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_SERIAL_CODE, ASYNC_NOT_UPDATE_FLASH);
+    }
 }
 
 /*****************************************************************************
@@ -896,6 +1157,11 @@ void Wifi_Consume_Queue_Data_Handle(void*arg1,void*arg2)
                 vTaskDelay(INITIATIVE_RESEND_TIMEOUT/portTICK_RATE_MS);
                 break;
 
+            case DEVICE_REQUEST_SERIAL_CODE_PACKAGE:/*该数据包用于 WiFi 模组告诉 MCU 获取串码了*/
+                _Wifi_Door_Lock_Send_Frame(receive_quent_data[0], &receive_quent_data[2], receive_quent_data[1],WIFI_EVENT_PACKAGE);
+                vTaskDelay(INITIATIVE_RESEND_TIMEOUT/portTICK_RATE_MS);
+                break;
+
 #ifndef Wifi_Door_Lock_Open_Ignore_Event
             case DEVICE_REVERSE_TIME_PACKAGE:/*该数据包用于 WiFi 模组向 MCU 请求授时,收到指令83,然后mcu发送数据包*/
                 _Wifi_Door_Lock_Send_Frame(receive_quent_data[0], &receive_quent_data[2], receive_quent_data[1],WIFI_EVENT_PACKAGE);
@@ -945,7 +1211,7 @@ void Wifi_Consume_Queue_Data_Handle(void*arg1,void*arg2)
 *****************************************************************************/
 static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info)
 {
-    log_debug0("Recv MCU event, event type:%d\n", frame_info->frame_type);
+    log_debug0("Recv MCU event, event type:0x%x\n", frame_info->frame_type);
 
     UINT8* buff = frame_info->body;
 
@@ -963,31 +1229,29 @@ static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info
             INT32 relative_year = 0;
             UINT8 temp[7] = {0};
 
-            utc_time = (struct tm *)IOTSys_localtime(NULL);
-            log_debug0("TYPE_EVENT_REQ_TIME--utc_time->tm_year=%d\n",utc_time->tm_year);
-            year = utc_time->tm_year;
-            log_debug0("TYPE_EVENT_REQ_TIME--year=%d\n",year);
-            relative_year=year-2000;
-            if(relative_year>=18){
-                temp[0] = 0x00;         //错误值， 0 表示本次授时有效， 1 表示本次授时无效
-            log_debug0("relative_year=%d\n",relative_year);
-            }else{
+            if(IOTSysP_SntpAsync()){
                 temp[0] = 0x01;         //错误值， 0 表示本次授时有效， 1 表示本次授时无效
-                log_debug0("relative_year=%d\n",relative_year);
+            }else{
+                utc_time = (struct tm *)IOTSys_localtime(NULL);
+                log_debug0("TYPE_EVENT_REQ_TIME--utc_time->tm_year=%d\n",utc_time->tm_year);
+                year = utc_time->tm_year;
+                log_debug0("TYPE_EVENT_REQ_TIME--year=%d\n",year);
+                relative_year=year-2000;
+
+                temp[0] = 0x00;         //错误值， 0 表示本次授时有效， 1 表示本次授时无效
+                temp[1] = relative_year;
+                temp[2] = utc_time->tm_mon ;
+                temp[3] = utc_time->tm_mday;
+                temp[4] = utc_time->tm_hour;
+                temp[5] = utc_time->tm_min;
+                temp[6] = utc_time->tm_sec;
+
+                log_debug0("temp[1]:0x%x,temp[2]:0x%x,temp[3]:0x%x,temp[4]:0x%x,temp[5]:0x%x,temp[6]:0x%x\n", temp[1],temp[2], temp[3],
+                temp[4], temp[5], temp[6]);
+
+                log_debug0("Y:%d,M:%d,D:%d,H:%d,M:%d,S:%d\n", year, utc_time->tm_mon, utc_time->tm_mday,
+                utc_time->tm_hour, utc_time->tm_min, utc_time->tm_sec);
             }
-
-            temp[1] = relative_year;
-            temp[2] = utc_time->tm_mon ;
-            temp[3] = utc_time->tm_mday;
-            temp[4] = utc_time->tm_hour;
-            temp[5] = utc_time->tm_min;
-            temp[6] = utc_time->tm_sec;
-
-            log_debug0("temp[1]:0x%x,temp[2]:0x%x,temp[3]:0x%x,temp[4]:0x%x,temp[5]:0x%x,temp[6]:0x%x\n", temp[1],temp[2], temp[3],
-            temp[4], temp[5], temp[6]);
-
-            log_debug0("Y:%d,M:%d,D:%d,H:%d,M:%d,S:%d\n", year, utc_time->tm_mon, utc_time->tm_mday,
-            utc_time->tm_hour, utc_time->tm_min, utc_time->tm_sec);
             _Wifi_Door_Lock_Send_Frame(DEVICE_TIME_SERVICE_PACKAGE, temp,7,WIFI_ACK_PACKAGE);
         }
             break;
@@ -1030,6 +1294,23 @@ static void _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(FRAME_STRUCT* frame_info
 
         case TYPE_EVENT_REPORT_ELECTRIC_QUANTITY_INFO://wifi主动向mcu发送0x8f指令,mcu回复0x00,之后mcu会发送0x0f指令,wifi回复0x80
             //将电池电量发送到云端
+            _Wifi_Door_Lock_Send_Frame(DEVICE_ACK_PACKAGE, NULL, 0,WIFI_ACK_PACKAGE);
+            _Wifi_Door_Lock_Cache_Attributes_Report_Cloud(frame_info);
+            break;
+
+        case TYPE_EVENT_REPORT_SERIAL_CODE_INFO://wifi主动向mcu发送0x90指令,mcu回复0x10,获取门锁的串码
+            //将门锁串码发送到云端
+            _Wifi_Door_Lock_Cache_Attributes_Report_Cloud(frame_info);
+            break;
+
+        case TYPE_EVENT_REPORT_ADD_INFO:
+            //将MCU添加密码指纹IC卡信息发送到云端
+            _Wifi_Door_Lock_Send_Frame(DEVICE_ACK_PACKAGE, NULL, 0,WIFI_ACK_PACKAGE);
+            _Wifi_Door_Lock_Cache_Attributes_Report_Cloud(frame_info);
+            break;
+
+        case TYPE_EVENT_REPORT_DELETE_INFO:
+            //将MCU删除密码指纹IC卡信息发送到云端
             _Wifi_Door_Lock_Send_Frame(DEVICE_ACK_PACKAGE, NULL, 0,WIFI_ACK_PACKAGE);
             _Wifi_Door_Lock_Cache_Attributes_Report_Cloud(frame_info);
             break;
@@ -1183,7 +1464,7 @@ void Uart_Consume_Queue_Data_Handle(void*arg1,void*arg2)
         _Wifi_Door_Lock_Print_Frame(frame_info,body_len);
         if(Protocol_Calc_Checksum(uart_data, frame_len) == frame_info->crc)
         {/*检测校验和*/
-            log_debug0("Recv MCU data, frame type:%d--frame_info->length=%d\n", frame_info->frame_type,frame_info->length);
+            log_debug0("Recv MCU data, frame type:0x%x--frame_info->length=%d\n", frame_info->frame_type,frame_info->length);
             Mcu_Seq_Number=frame_info->sequence_number;
             switch(frame_info->frame_type)
             {
@@ -1216,12 +1497,18 @@ void Uart_Consume_Queue_Data_Handle(void*arg1,void*arg2)
                     _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(frame_info);
                     break;
 
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
-                case MCU_REVERSE_TIME_INFO:     /*MCU应答WIFI的指令,收到MCU的时间*/
+                case MCU_DOOR_LOCK_REPORT_ADD_INFO:     /*MCU上报mcu添加密码指纹IC卡信息到WIFI上*/
+                    _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(frame_info);
+                    break;
+
+                case MCU_DOOR_LOCK_REPORT_DELETE_INFO:     /*MCU上报mcu删除密码指纹IC卡信息到WIFI上*/
+                    _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(frame_info);
+                    break;
+
+                case MCU_DOOR_LOCK_REPORT_SERIAL_CODE_INFO:     /*MCU上报门锁串码到WIFI上*/
                     initiative_resend_count=0;
                     _Wifi_Door_Lock_Handle_Event_Frame_From_Mcu(frame_info);
                     break;
-#endif
 
                 //添加的指令,收到mcu的应答停止重发机制
                 case MCU_ACK_PACKAGE:           /*MCU应答WIFI的指令*/
@@ -1233,6 +1520,7 @@ void Uart_Consume_Queue_Data_Handle(void*arg1,void*arg2)
 
                 default:
                     log_debug0("Recv MCU data, frame type:0x%x\n", frame_info->frame_type);
+                    _Wifi_Door_Lock_Send_Frame(DEVICE_INVALID_ACK_PACKAGE, NULL, 0,WIFI_ACK_PACKAGE);
                     break;
             }
         }
@@ -1240,6 +1528,7 @@ void Uart_Consume_Queue_Data_Handle(void*arg1,void*arg2)
         frame_head = Protocol_Get_Next_Frame(frame_head);
         log_debug0("frame_head:%p\n",frame_head);
     }
+    log_debug0("55555555555555555555555555555555555555555--MIN FREE MEMORY: %d\n", IOTSysP_GetFreeHeapSize());
 }
 
 /*****************************************************************************
@@ -1287,34 +1576,34 @@ void _Wifi_Door_Lock_Get_MCU_Pass_Task(void *arg)
 /*****************************************************************************
 **函 数 名: Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu
 **输入参数: UINT8 event_type
-             UINT8 state
+            INT8 state
 **输出参数: 无
-**返 回 值:Air_Send_IOT_Event_Frame_To_Mcu
+**返 回 值: Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu
 **功能描述: 外部调用，向MCU发送联网状态-OTA升级/主动发送启动定时器
             无响应300ms再次发送
 **作     者: wqw
 *****************************************************************************/
-void Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(UINT8 event_type, UINT8 state)
+void Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(UINT8 event_type, INT8 state)
 {
     UINT8 result = NETWORK_CONFIGURE_DEVICE_STAR_SUCCESS;
 
     switch(event_type)
     {
         case IOTDM_EVENT_NETWORK_CONFIG:
-            if(state == 1)//state==1, network NOT configed, start config
+            if(state == 1)//state==1, network NOT configed, start config  0
             {
                 result = NETWORK_CONFIGURE_DEVICE_STAR_SUCCESS;
                  s_Network_Status = result;
                  _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
-            }else if(state == 2){//state==2, network ALREADY configed, skip config
-                result = NETWORK_CONFIGURE_CONNECT_ROUTER_SUCCESS;
-                s_Network_Status = result;
-                _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
-            }else if(state == 0){//state==0, network config FINISH, success
+            }else if(state == 3){//network, receive ssid passwd   1
                 result = NETWORK_CONFIGURE_SEND_SSID_PWD_SUCCESS;
                 s_Network_Status = result;
                 _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
-            }else if(state <= 0){//state<0,  network config FINISH, failed
+            }else if(state == -1){//network config password error, failed     4
+                result = NETWORK_CONFIGURE_PWD_ERROR;
+                s_Network_Status = result;
+                _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
+            }else if(state == -2){//network config can't find special ssid, failed   3
                 result = NETWORK_CONFIGURE_SSID_ERROR;
                 s_Network_Status = result;
                 _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
@@ -1322,16 +1611,12 @@ void Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(UINT8 event_type, UINT8 state)
             break;
 
         case IOTDM_EVENT_NETWORK_CONNECT:
-            if(state == 1)//connected=1, network configured and is currently connected
+            if(state == 1)//state=1, network configured and is currently connected  2
             {
                 result = NETWORK_CONFIGURE_CONNECT_ROUTER_SUCCESS;
                 s_Network_Status = result;
                 _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
-            }else if(state == 0){//connected=0, network configured and is currently disconnected
-                result = NETWORK_CONFIGURE_PWD_ERROR;
-                s_Network_Status = result;
-                _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
-            }else if(state <= 0){//connected<0, network unconfigured
+            }else if(state == -1){//state=-1, network connect failed  6
                 result = NETWORK_NORMAL_CONNECT_ROUTER_ERROR;
                 s_Network_Status = result;
                 _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
@@ -1339,13 +1624,22 @@ void Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(UINT8 event_type, UINT8 state)
             break;
 
         case IOTDM_EVENT_CLOUD_CONNECT:
-            if(state == 1)//connected=1, connected with the server
+            if(state == 1)//state=1, connected with the server  5
             {
                 result = NETWORK_NORMAL_CLOUD_SUCCESS;
                 s_Network_Status = result;
                 _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
-            }else if(state == 0){//connected=0, disconnected with the server
+            }else if(state == -1){//state=-1, connected with the server falied  7
                 result = NETWORK_NORMAL_CONNECT_CLOUD_ERROR;
+                s_Network_Status = result;
+                _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
+            }
+            break;
+
+        case IOTDM_EVENT_AUTH:
+            if(state < 0)//state<0, auth failed  8
+            {
+                result = NETWORK_NORMAL_CLOUD_AUTHORIZATION_ERROR;
                 s_Network_Status = result;
                 _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_WIFI_STATUS_REPORT_PACKAGE, &result, 1);
             }
@@ -1370,7 +1664,8 @@ void Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(UINT8 event_type, UINT8 state)
             wifi_connect_cloud_success = state;
             _Wifi_Door_Lock_Cache_Attributes_Report_Cloud(NULL);
             _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_REQUEST_ELECTRIC_QUANTITY_PACKAGE, NULL, 0);//设备连云成功后获取mcu的电量
-
+            _Wifi_Door_Lock_Data_Queue_Loading(DEVICE_REQUEST_SERIAL_CODE_PACKAGE, NULL, 0);//设备连云成功后获取mcu的串码
+            _Wifi_Door_Lock_Get_GadgetFunction_to_Cloud();
 #ifdef ENADLE_GET_MCU_PASS_INFO
             xTaskCreate(_Wifi_Door_Lock_Get_MCU_Pass_Task,"_Wifi_Door_Lock_Get_MCU_Pass_Task",512,NULL, 4,NULL);
 #endif

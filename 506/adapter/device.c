@@ -193,13 +193,12 @@ void IOTDev_Event(DMEvent *event)
     switch(event->event) {
     case IOTDM_EVENT_NETWORK_CONNECT:
         log_debug0("IOTDev_Event, NETWORK CONNECT STATUS =%d\n", event->param.network.connected);
-        if(IOTSDK_State() != STATE_WORK){
-            break;
-        }else if (event->param.network.connected < 0){//connected<0, network unconfigured
-
-        }else if (event->param.network.connected == 0){//connected=0, network configured and is currently disconnected
+        if (event->param.network.connected == 0){//connected=0, network configured and is currently disconnected
             lamp_effect_set(LAMP_EFFECT_STATION_MODE, PERIOD);
-        } else if(event->param.network.connected == 1){//connected=1, network configured and is currently connected
+        }else if(event->param.network.connected == 1){//connected=1, network configured and is currently connected
+            Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_NETWORK_CONNECT,event->param.network.connected);
+        }else if(event->param.network.connected == -1){//connected=-1, network connect failed
+            Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_NETWORK_CONNECT,event->param.network.connected);
         }
         break;
     case IOTDM_EVENT_NETWORK_CONFIG:
@@ -209,28 +208,35 @@ void IOTDev_Event(DMEvent *event)
             lamp_effect_set(LAMP_EFFECT_OFF_MODE, PERIOD);
             lamp_effect_set(LAMP_EFFECT_SOFTAP_MODE, PERIOD);
             Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_NETWORK_CONFIG,event->param.nwconfig.state);//启动softap模式
-        }else if(event->param.nwconfig.state == 2){//state==2, network ALREADY configed, skip config
-            Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_NETWORK_CONFIG,event->param.nwconfig.state);
-        } else if(event->param.nwconfig.state < 0){//state<0,  network config FINISH, failed
+        }else if(event->param.nwconfig.state == 3){//state==3, network, receive ssid passwd
             Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_NETWORK_CONFIG,event->param.nwconfig.state);
         }else if(event->param.nwconfig.state == 0){//state==0, network config FINISH, success
             lamp_effect_set(LAMP_EFFECT_OFF_MODE, PERIOD);
             lamp_effect_set(LAMP_EFFECT_STATION_MODE, PERIOD);
+        }else if(event->param.nwconfig.state == -1){//state==-1, network config password error, failed
+            Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_NETWORK_CONFIG,event->param.nwconfig.state);
+        }else if(event->param.nwconfig.state == -2){//state==-2, network config can't find special ssid, failed
             Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_NETWORK_CONFIG,event->param.nwconfig.state);
         }
         break;
     case IOTDM_EVENT_CLOUD_CONNECT:
         log_debug0("IOTDev_Event, CLOUD CONNECT STATUS =%d\n", event->param.cloudconn.connected);
-        if(event->param.cloudconn.connected == 1){
+        if(event->param.cloudconn.connected == 1){//connected with the server
             lamp_effect_set(LAMP_EFFECT_OFF_MODE, PERIOD);
             Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_CLOUD_CONNECT,event->param.cloudconn.connected);
-        }else if(event->param.cloudconn.connected == 0){
+        }else if(event->param.cloudconn.connected == -1){//connected with the server falied
             Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_CLOUD_CONNECT,event->param.cloudconn.connected);
+        }
+        break;
+    case IOTDM_EVENT_AUTH:
+        if(event->param.auth.result < 0){//auth failed
+            Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_AUTH,event->param.auth.result);
         }
         break;
     case IOTDM_EVENT_ACTIVATE:
         break;
     case IOTDM_EVENT_CREATEGADGET:
+        Get_Gadgetid_Function(event->param.creategadget.gadgetid);
         Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_CREATEGADGET,event->param.creategadget.created);
         break;
     case IOTDM_EVENT_FORCEBIND: //仅清除设备信�?
@@ -289,14 +295,6 @@ int IOTDev_GetAttribute(UINT32 attribute_id, OCTData *attr)
             attr->type = OCTDATATYPE_STRING;
             iots_strcpy(attr->value.String.String, "hw version");
             break;
-        case GARDGET_DEVICE_ATTRIBUTE_DELAY_TIME:
-            attr->type = OCTDATATYPE_STRING;
-            schema_task_get_delay_info(attr->value.String.String);
-            break;
-        case GARDGET_DEVICE_ATTRIBUTE_TIMEING:
-            attr->type = OCTDATATYPE_STRING;
-            schema_task_get_timer_info(attr->value.String.String);
-            break;
 
         case GARDGET_DEVICE_ATTRIBUTE_OFFON:
         case GARDGET_DEVICE_ATTRIBUTE_PASSWORD:
@@ -311,10 +309,16 @@ int IOTDev_GetAttribute(UINT32 attribute_id, OCTData *attr)
 
         case GARDGET_DEVICE_ATTRIBUTE_SET_PASSWORD:
         case GARDGET_DEVICE_ATTRIBUTE_SET_FINGERPRINT:
+        case GARDGET_DEVICE_ATTRIBUTE_SET_CARD:
         case GARDGET_DEVICE_ATTRIBUTE_CLEAR_PASSWORD:
         case GARDGET_DEVICE_ATTRIBUTE_CLEAR_FINGERPRINT:
+        case GARDGET_DEVICE_ATTRIBUTE_CLEAR_CARD:
             attr->type = OCTDATATYPE_STRING;
             iots_strcpy(attr->value.String.String,Wifi_Door_Lock_Get_String_Attribute(attribute_id));//从串口得到门锁的属性并存储
+            break;
+        case GARDGET_DEVICE_ATTRIBUTE_SERIAL_CODE:
+            attr->type = OCTDATATYPE_STRING;
+            iots_strcpy(attr->value.String.String,Wifi_Door_Lock_Get_SERIAL_CODE_From_MCU());//从串口得到门锁串码的属性
             break;
 
         default:
@@ -330,28 +334,11 @@ int IOTDev_ExecuteAction(UINT32 action_id, OCTData *param)
     }
 
     switch (action_id) {
-        case GARDGET_DEVICE_ACTION_SETDELAY_TIME:
-            if(param->type != OCTDATATYPE_STRING) {
-                os_printf("param error\n");
-                return E_FAILED;
-            }
-            log_debug0("execute action(%08x) set delay=%s\n", action_id, param->value.String.String);
-            schema_task_set_delay_info(param->value.String.String);
-            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_DELAY_TIME, ASYNC_UPDATE_FLASH);
-            break;
-        case GARDGET_DEVICE_ACTION_SETTIMEING:
-            if(param->type != OCTDATATYPE_STRING) {
-                os_printf("param error\n");
-                return E_FAILED;
-            }
-            log_debug0("execute action(%08x) set timing=%s\n", action_id, param->value.String.String);
-            schema_task_set_timer_info(param->value.String.String);
-            sync_report_attr(GARDGET_DEVICE_ATTRIBUTE_TIMEING, ASYNC_UPDATE_FLASH);
-            break;
         case GARDGET_DEVICE_ACTION_OTA_CHECK:
             os_printf("execute action(%08x) ota check\n", action_id);
             char version[5];
             iots_sprintf(version, "%d", ADA_VERSION);
+            Wifi_Door_Lock_Send_IOT_Event_Frame_To_Mcu(IOTDM_EVENT_OTA_STATUS,1);
             IOTOTA_Start(version);
             break;
         default:
