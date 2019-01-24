@@ -3,10 +3,6 @@
 
 #include "protocol.h"
 
-#ifndef Wifi_Door_Lock_Open_Ignore_Event
-#define Wifi_Door_Lock_Open_Ignore_Event
-#endif
-
 #define Wifi_Door_Lock_SUCCESS 1   /*Wifi_Door_Lock相关功能操作成功*/
 #define Wifi_Door_Lock_FAILURE 0   /*操作失败*/
 
@@ -17,5 +13,6 @@ UINT8* Wifi_Door_Lock_Get_String_Attribute(UINT32 attribute_id);
 UINT8 Wifi_Door_Lock_Init(void);
 UINT8 Wifi_Door_Lock_Enter_Softap(void);
 UINT8* Wifi_Door_Lock_Get_SERIAL_CODE_From_MCU(void);
+void Get_Gadgetid_Function(UINT8* arg);
 
 #endif

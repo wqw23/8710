@@ -27,7 +27,7 @@
 #define GARDGET_DEVICE_ATTRIBUTE_CLEAR_CARD         (0x000c0016)//IC卡已经清除报告
 
 #define GARDGET_DEVICE_ATTRIBUTE_WARNING            (0x000c0011)//门锁警告状态上报
-#define GARDGET_DEVICE_ATTRIBUTE_CAR                (0x000c0012)//卡片开锁
+#define GARDGET_DEVICE_ATTRIBUTE_CAR                (0x000c0017)//IC卡开锁
 #define GARDGET_DEVICE_ATTRIBUTE_KEY                (0x000c0013)//钥匙开锁
 #define GARDGET_DEVICE_ATTRIBUTE_SERIAL_CODE        (0x000c0014)//门锁串号信息上报
 
